@@ -19,7 +19,10 @@ For each matrix, the script records:
 - number of inspections;
 - final true residual ratio;
 - final certificate ratio;
-- runtime;
+- total runtime;
+- QB runtime, certification runtime, and final residual-evaluation runtime;
+- matrix-vector products with \(A\), split into QB sampling, certification, and
+  final residual evaluation;
 - false stop indicator.
 
 ## Supported Matrix Formats
@@ -68,6 +71,34 @@ python generate_application_matrices.py --out-dir data
 
 This requires `scikit-learn` and `scikit-image`.
 
+## SuiteSparse Matrices
+
+The paper-scale real-matrix study uses selected matrices from the SuiteSparse
+Matrix Collection:
+
+- `SNAP/ca-HepPh`: \(12008\times 12008\), 237010 nonzeros.
+- `SNAP/email-Enron`: \(36692\times 36692\), 367662 nonzeros.
+- `SNAP/web-NotreDame`: \(325729\times 325729\), 1497134 nonzeros.
+- `LPnetlib/lp_fit2p`: \(3000\times 13525\), 50284 nonzeros. The paper uses
+  its transpose for the compressible sparse low-rank test.
+
+Download them with:
+
+```bash
+python download_suitesparse_matrices.py --out-dir data/suitesparse
+```
+
+Download only the LPnetlib matrix and prepare the transposed sparse input with:
+
+```bash
+python download_suitesparse_matrices.py \
+  --out-dir data/suitesparse_lowrank \
+  --include LPnetlib/lp_fit2p
+python prepare_transposed_matrix.py \
+  data/suitesparse_lowrank/LPnetlib_lp_fit2p.mtx \
+  data/suitesparse_lowrank/LPnetlib_lp_fit2p_transpose.npz
+```
+
 ## Conda Environment
 
 Recommended:
@@ -97,6 +128,39 @@ python run_real_matrices.py --data-dir data
 python plot_real_matrix_ranks.py --results results/real_matrix_overhead.csv --out-dir figures
 ```
 
+For the SuiteSparse study, use a non-oracle effective-rank mode to avoid
+dense SVD computations:
+
+```bash
+python download_suitesparse_matrices.py --out-dir data/suitesparse
+python run_real_matrices.py \
+  --data-dir data/suitesparse \
+  --trials 10 \
+  --block-size 10 \
+  --cert-size 200 \
+  --cert-batch-size 20 \
+  --rel-tol 0.95 \
+  --max-rank 120 \
+  --rho-mode conservative \
+  --results-dir results/suitesparse
+```
+
+For the compressible SuiteSparse LP matrix, use:
+
+```bash
+python run_real_matrices.py \
+  --data-dir data/suitesparse_lowrank \
+  --include LPnetlib_lp_fit2p_transpose \
+  --trials 10 \
+  --block-size 10 \
+  --cert-size 200 \
+  --cert-batch-size 20 \
+  --rel-tol 0.1 \
+  --max-rank 120 \
+  --rho-mode conservative \
+  --results-dir results/suitesparse_lowrank_rel01
+```
+
 Useful options:
 
 ```bash
@@ -110,13 +174,23 @@ python experiments/real_matrix_study/run_real_matrices.py \
   --rho-mode oracle
 ```
 
+To run only selected SuiteSparse matrices, pass their file stems:
+
+```bash
+python run_real_matrices.py \
+  --data-dir data/suitesparse \
+  --include SNAP_ca-HepPh SNAP_email-Enron \
+  --rho-mode conservative \
+  --results-dir results/suitesparse_medium
+```
+
 ## Outputs
 
 - `results/real_matrix_trials.csv`: per-matrix, per-method, per-trial results.
 - `results/real_matrix_summary.csv`: aggregated results.
 - `results/real_matrix_overhead.csv`: anytime-minus-naive overhead by matrix.
 - `results/real_matrix_table.tex`: LaTeX table for the paper.
+- `results/real_matrix_cost_table.tex`: LaTeX cost table with runtime and matvec counts.
 - `figures/real_matrix_rank_comparison.pdf`: rank comparison figure for the paper.
 
-The generated table can be copied into the manuscript table directory, and the
-generated PDF figure can be copied into the manuscript figure directory.
+After running, send me the generated CSVs or just say it is done, and I can integrate the table into `paper.tex`.
