@@ -435,7 +435,7 @@ def write_latex_table(path: Path, rows: list[dict[str, float | str]]) -> None:
     lines = [
         "\\begin{table}[t]",
         "  \\centering",
-        "  \\caption{Real matrix adaptive QB results.}",
+        "  \\caption{Real matrix adaptive QB results. The residual column reports the final residual-to-tolerance ratio $\\|A-QB\\|_{\\mathrm{F}}/\\varepsilon$ for the anytime run, so values below one meet the tolerance.}",
         "  \\label{tab:real-matrices}",
         "  \\small",
         "  \\setlength{\\tabcolsep}{4pt}",
