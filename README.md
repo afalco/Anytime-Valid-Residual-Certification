@@ -9,11 +9,14 @@ The scripts reproduce the numerical studies used in the manuscript:
 - repeated-inspection miscoverage for fixed-time certificates;
 - adaptive randomized QB experiments on synthetic spectra;
 - effective-rank sensitivity experiments;
-- adaptive randomized QB experiments on structured real matrices.
+- adaptive randomized QB experiments on structured real matrices;
+- SuiteSparse sparse-matrix experiments with runtime and matrix-vector product
+  cost accounting.
 
 The code is intentionally lightweight and uses standard scientific Python
-packages. Real matrices used in the paper are generated locally from
-reproducible scripts and standard example datasets.
+packages. Small real matrices used in the paper are generated locally from
+reproducible scripts and standard example datasets. The SuiteSparse scripts
+download selected Matrix Market files into an ignored local data directory.
 
 ## Repository Layout
 
@@ -59,6 +62,9 @@ python experiments/run_all_experiments.py
 This regenerates the CSV files and figures used in the manuscript. Individual
 experiments can also be run from their subdirectories; see the corresponding
 `README.md` files.
+
+SuiteSparse data are not stored in the repository. To download the matrices and
+run the sparse study, see `experiments/real_matrix_study/README.md`.
 
 ## Citation
 
