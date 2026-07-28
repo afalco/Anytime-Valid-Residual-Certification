@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the accompanying paper and this repository."
+title: "Anytime-Valid Residual Certification"
+authors:
+  - family-names: "Berna"
+    given-names: "Pablo M."
+  - family-names: "Falco"
+    given-names: "Antonio"
+  - family-names: "Mondejar"
+    given-names: "Diego"
+year: 2026
+license: MIT
+url: "https://github.com/afalco/Anytime-Valid-Residual-Certification"
+repository-code: "https://github.com/afalco/Anytime-Valid-Residual-Certification"

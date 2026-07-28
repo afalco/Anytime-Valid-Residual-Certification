@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+.pytest_cache/
+
+experiments/*/results/
+experiments/*/figures/
+experiments/real_matrix_study/data/
