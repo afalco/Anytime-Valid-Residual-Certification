@@ -174,6 +174,49 @@ python experiments/real_matrix_study/run_real_matrices.py \
   --rho-mode oracle
 ```
 
+Effective-rank modes:
+
+- `--rho-mode conservative` uses \(\rho=1\). This is the fully automatic
+  mode covered by the theorem and is the right choice for the certified
+  SuiteSparse tables in the paper.
+- `--rho-mode oracle` computes the exact residual effective rank. This is
+  useful for diagnostics on small or dense matrices, but it is not appropriate
+  for large sparse matrix-free studies because it forms dense residual
+  information.
+- `--rho-mode pilot` estimates the residual effective rank from fresh Gaussian
+  pilot vectors. It estimates
+  \(\operatorname{tr}(R^\top R)\) from \(\|R\xi\|_2^2\) and
+  \(\operatorname{tr}((R^\top R)^2)\) from \(\|R^\top R\xi\|_2^2\), then uses
+  a shrunken value
+  \[
+    \widehat\rho_{\mathrm{pilot}}
+    =
+    \max\{1,\eta\,\widehat t^2/\widehat q\}.
+  \]
+  The options `--rho-pilot-size` and `--rho-pilot-shrink` control the number
+  of pilot vectors and the shrinkage factor \(\eta\). This mode is an
+  implementable heuristic acceleration; it is not yet a formally calibrated
+  lower confidence bound, so it should be reported separately from the
+  guaranteed conservative results.
+
+Example pilot run:
+
+```bash
+python experiments/real_matrix_study/run_real_matrices.py \
+  --data-dir experiments/real_matrix_study/data/suitesparse \
+  --include SNAP_ca-HepPh \
+  --trials 10 \
+  --block-size 10 \
+  --cert-size 200 \
+  --cert-batch-size 20 \
+  --rel-tol 0.95 \
+  --max-rank 120 \
+  --rho-mode pilot \
+  --rho-pilot-size 20 \
+  --rho-pilot-shrink 0.25 \
+  --results-dir experiments/real_matrix_study/results/suitesparse_pilot_cahepph_rel095
+```
+
 To run only selected SuiteSparse matrices, pass their file stems:
 
 ```bash
