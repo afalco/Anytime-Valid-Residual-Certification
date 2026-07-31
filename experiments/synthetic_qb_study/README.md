@@ -62,7 +62,7 @@ This stress-test diagnostic uses small certification sketches and \(\alpha=0.25\
 - certificate miscoverage: the final certificate is below the exact squared residual;
 - false stop: the algorithm accepts while \(\|R_\tau\|_{\mathrm{F}}>\varepsilon\).
 
-The diagnostic uses oracle effective-rank information so that the table isolates sequential calibration from effective-rank estimation.
+The default table uses \(N=500\) trials, certification sketch size \(s=3\), tolerance \(\varepsilon=0.1\|A\|_{\mathrm{F}}\), block size \(1\), and maximum rank \(k_{\max}=80\). Failure rates are reported with Wilson 95% confidence intervals, so a zero observed failure rate is not presented as proof of zero probability. The table also reports the fraction of certified stops; runs that reach the rank cap without satisfying the certificate inequality are rank-cap terminations, not certified stops. The diagnostic uses oracle effective-rank information so that the table isolates sequential calibration from effective-rank estimation.
 
 ## Effective-Rank Sensitivity
 

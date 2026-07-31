@@ -16,24 +16,46 @@ from run_synthetic_qb import (
 )
 
 
+def wilson_interval(rate: float, n: int, z: float = 1.959963984540054) -> tuple[float, float]:
+    if n <= 0:
+        return (math.nan, math.nan)
+    denominator = 1.0 + z * z / n
+    center = (rate + z * z / (2.0 * n)) / denominator
+    half_width = z * math.sqrt(rate * (1.0 - rate) / n + z * z / (4.0 * n * n)) / denominator
+    return max(0.0, center - half_width), min(1.0, center + half_width)
+
+
+def format_rate_ci(rate: float, n: int) -> str:
+    low, high = wilson_interval(rate, n)
+    return f"{rate:.3f} [{low:.3f},{high:.3f}]"
+
+
 def summarize(rows: list[TrialResult], alpha: float) -> list[dict[str, float | str]]:
     summary = []
     keys = sorted({(row.spectrum, row.method) for row in rows})
     for spectrum, method in keys:
         group = [row for row in rows if row.spectrum == spectrum and row.method == method]
+        trials = len(group)
+        certificate_miscoverage_rate = sum(
+            row.certificate < row.residual_fro * row.residual_fro for row in group
+        ) / trials
+        false_stop_rate = sum(row.false_stop for row in group) / trials
+        certified_stop_rate = sum(row.certificate <= row.tolerance * row.tolerance for row in group) / trials
         summary.append(
             {
                 "spectrum": spectrum,
                 "method": method,
                 "alpha": alpha,
-                "trials": len(group),
+                "trials": trials,
                 "mean_rank": sum(row.rank for row in group) / len(group),
                 "mean_inspections": sum(row.inspections for row in group) / len(group),
-                "certificate_miscoverage_rate": sum(
-                    row.certificate < row.residual_fro * row.residual_fro for row in group
-                )
-                / len(group),
-                "false_stop_rate": sum(row.false_stop for row in group) / len(group),
+                "certificate_miscoverage_rate": certificate_miscoverage_rate,
+                "certificate_miscoverage_ci_low": wilson_interval(certificate_miscoverage_rate, trials)[0],
+                "certificate_miscoverage_ci_high": wilson_interval(certificate_miscoverage_rate, trials)[1],
+                "false_stop_rate": false_stop_rate,
+                "false_stop_ci_low": wilson_interval(false_stop_rate, trials)[0],
+                "false_stop_ci_high": wilson_interval(false_stop_rate, trials)[1],
+                "certified_stop_rate": certified_stop_rate,
                 "mean_residual_to_tolerance": sum(row.residual_fro / row.tolerance for row in group)
                 / len(group),
             }
@@ -57,14 +79,14 @@ def write_latex_table(path: Path, rows: list[dict[str, float | str]]) -> None:
     lines = [
         "\\begin{table}[t]",
         "  \\centering",
-        "  \\caption{Direct adaptive-QB coverage diagnostic. The table reports empirical failure rates at the data-dependent stopping rank over synthetic matrices. Certificate miscoverage means that the final upper certificate is below the exact squared residual; false stop means \\(\\|R_\\tau\\|_{\\mathrm{F}}>\\varepsilon\\) at a certified stop. The diagnostic uses oracle effective-rank information in the fixed-time certificates, so it isolates the effect of repeated inspection rather than conservatism from \\(\\rho=1\\).}",
+        "  \\caption{Direct adaptive-QB coverage diagnostic. Results use \\(N=500\\) trials, certification sketch size \\(s=3\\), tolerance \\(\\varepsilon=0.1\\|A\\|_{\\mathrm{F}}\\), block size \\(1\\), and maximum rank \\(k_{\\max}=80=n\\). The risk level \\(\\alpha=0.25\\) is used only as a stress test to make optional-stopping effects visible at moderate Monte Carlo sample size; it is not proposed as a practical certification level. Certificate miscoverage means that the final upper certificate is below the exact squared residual; false stop means \\(\\|R_\\tau\\|_{\\mathrm{F}}>\\varepsilon\\) at a certified stop. Failure rates are reported with Wilson 95\\% confidence intervals. Runs that reach \\(k_{\\max}\\) without satisfying the certificate inequality are treated as rank-cap terminations, not certified stops.}",
         "  \\label{tab:adaptive-qb-coverage}",
         "  \\small",
         "  \\setlength{\\tabcolsep}{4pt}",
         "  \\resizebox{\\textwidth}{!}{%",
         "  \\begin{tabular}{llrrrrr}",
         "    \\toprule",
-        "    Spectrum & Method & Mean rank & Inspections & Cert. miscoverage & False stop & Residual/tol. \\\\",
+        "    Spectrum & Method & Mean rank & Certified & Cert. miscoverage & False stop & Residual/tol. \\\\",
         "    \\midrule",
     ]
     for spectrum in spectra:
@@ -75,9 +97,9 @@ def write_latex_table(path: Path, rows: list[dict[str, float | str]]) -> None:
                 f"{spectrum.replace('_', ' ')} & "
                 f"{method} & "
                 f"{float(row['mean_rank']):.1f} & "
-                f"{float(row['mean_inspections']):.1f} & "
-                f"{float(row['certificate_miscoverage_rate']):.3f} & "
-                f"{float(row['false_stop_rate']):.3f} & "
+                f"{float(row['certified_stop_rate']):.3f} & "
+                f"{format_rate_ci(float(row['certificate_miscoverage_rate']), int(row['trials']))} & "
+                f"{format_rate_ci(float(row['false_stop_rate']), int(row['trials']))} & "
                 f"{float(row['mean_residual_to_tolerance']):.3f} \\\\"
             )
     lines.extend(["    \\bottomrule", "  \\end{tabular}}", "\\end{table}"])
