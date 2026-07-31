@@ -246,8 +246,9 @@ def write_latex_overhead_table(path: Path, rows: list[dict[str, float | str]]) -
     lines = [
         "\\begin{table}[t]",
         "  \\centering",
-        "  \\caption{Rank and inspection overhead of anytime-valid stopping on synthetic QB experiments.}",
+        "  \\caption{Rank and inspection overhead of oracle anytime-valid stopping on synthetic QB experiments. The anytime rule uses \\(\\rho_j=\\reff(R_j)\\) to isolate the cost of sequential calibration from effective-rank estimation.}",
         "  \\label{tab:synthetic-qb-overhead}",
+        "  \\resizebox{\\textwidth}{!}{%",
         "  \\begin{tabular}{lrrrr}",
         "    \\toprule",
         "    Spectrum & Naive rank & Anytime rank & Rank overhead & Inspection overhead \\\\",
@@ -267,7 +268,7 @@ def write_latex_overhead_table(path: Path, rows: list[dict[str, float | str]]) -
     lines.extend(
         [
             "    \\bottomrule",
-            "  \\end{tabular}",
+            "  \\end{tabular}}",
             "\\end{table}",
         ]
     )

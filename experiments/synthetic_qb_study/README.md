@@ -24,6 +24,7 @@ followed by orthogonalization and update of \(Q_j\).
 ## Files
 
 - `run_synthetic_qb.py`: main experiment script.
+- `run_adaptive_qb_coverage.py`: direct adaptive-QB coverage diagnostic at the data-dependent stopping rank.
 - `run_effective_rank_sensitivity.py`: compares anytime stopping with an oracle effective-rank lower bound against the conservative \(\rho=1\) certificate.
 - `results/synthetic_qb_summary.csv`: aggregated results.
 - `results/synthetic_qb_trials.csv`: per-trial results.
@@ -35,25 +36,40 @@ followed by orthogonalization and update of \(Q_j\).
 From the project root:
 
 ```bash
-python experiments/synthetic_qb_study/run_synthetic_qb.py
+/Users/antoniofalco/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 experiments/synthetic_qb_study/run_synthetic_qb.py
 ```
 
 Optional arguments:
 
 ```bash
-python experiments/synthetic_qb_study/run_synthetic_qb.py --trials 60 --n 120 --block-size 5 --cert-size 80 --alpha 0.05 --rel-tol 0.1
+/Users/antoniofalco/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 experiments/synthetic_qb_study/run_synthetic_qb.py --trials 60 --n 120 --block-size 5 --cert-size 80 --alpha 0.05 --rel-tol 0.1
 ```
 
 ## Outputs
 
 The main figure reports the mean selected rank by spectrum family and stopping rule. The CSV files contain the empirical false-stop rates and residual statistics.
 
+## Adaptive-QB Coverage Diagnostic
+
+Run:
+
+```bash
+/Users/antoniofalco/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 experiments/synthetic_qb_study/run_adaptive_qb_coverage.py
+```
+
+This stress-test diagnostic uses small certification sketches and \(\alpha=0.25\) to make repeated-inspection effects visible inside the adaptive QB loop. It reports two empirical failure rates at the selected rank:
+
+- certificate miscoverage: the final certificate is below the exact squared residual;
+- false stop: the algorithm accepts while \(\|R_\tau\|_{\mathrm{F}}>\varepsilon\).
+
+The diagnostic uses oracle effective-rank information so that the table isolates sequential calibration from effective-rank estimation.
+
 ## Effective-Rank Sensitivity
 
 Run:
 
 ```bash
-python experiments/synthetic_qb_study/run_effective_rank_sensitivity.py
+/Users/antoniofalco/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 experiments/synthetic_qb_study/run_effective_rank_sensitivity.py
 ```
 
 This generates:
