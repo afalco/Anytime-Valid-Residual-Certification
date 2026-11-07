@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'experiments' / 'revision_R1_study'))
-from build_artifacts import interval, table
+from build_artifacts import interval, table, wilson
 
 
 class ArtifactTests(unittest.TestCase):
@@ -15,6 +15,10 @@ class ArtifactTests(unittest.TestCase):
         value = interval(0, 20000)
         self.assertIn('0.000192', value)
         self.assertEqual(interval(0, 0), 'NA')
+        self.assertTrue(value.startswith('0 [0,'))
+        self.assertEqual(wilson(0, 500)[0], 0)
+        self.assertEqual(wilson(500, 500)[1], 1)
+        self.assertNotIn('e-', interval(0, 500))
 
     def test_math_headers_keep_backslashes_and_no_control_characters(self):
         with tempfile.TemporaryDirectory() as directory:

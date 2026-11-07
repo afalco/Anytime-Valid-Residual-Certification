@@ -74,6 +74,11 @@ the frozen production runs and regenerated resources are documented in
 The limits of the Gaussian implementation and the distinction between matrix
 rank, tensor structure and prospective greedy extensions are recorded in
 [`docs/R1_scope.md`](docs/R1_scope.md).
+The expanded 2000-trial explicit projection check and the implicit Schur
+experiment are documented in
+[`experiments/revision_followup_study/README.md`](experiments/revision_followup_study/README.md).
+Their separate protocol preserves the original frozen study; use its documented
+`--followup-results` rebuild option for the latest manuscript tables.
 
 ## Reproduce All Experiments
 

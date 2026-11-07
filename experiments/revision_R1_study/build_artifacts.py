@@ -25,7 +25,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / 'audit'))
-from run_exact_projection_diagnostic import wilson
+from run_exact_projection_diagnostic import wilson as _wilson
 from run_production import GROUPS, expected, write_csv
 
 
@@ -46,11 +46,28 @@ def average(rows, field):
     return float(np.mean([float(row[field]) for row in rows]))
 
 
+def wilson(count, total):
+    lo, hi = _wilson(count, total)
+    return (0.0 if count == 0 else lo, 1.0 if count == total else hi)
+
+
+def probability(value, digits=5):
+    if value in (0, 1):
+        return str(int(value))
+    places = max(0, digits - 1 - math.floor(math.log10(abs(value))))
+    return f'{value:.{places}f}'.rstrip('0').rstrip('.')
+
+
+def scientific_probability(value):
+    mantissa, exponent = f'{value:.3e}'.split('e')
+    return rf'${mantissa}\times10^{{{int(exponent)}}}$'
+
+
 def interval(count, total):
     if not total:
         return 'NA'
     lo, hi = wilson(count, total)
-    return f'{count/total:.3g} [{lo:.3g},{hi:.3g}]'
+    return f'{probability(count/total)} [{probability(lo, 4)},{probability(hi, 4)}]'
 
 
 def table(directory, filename, label, caption, headers, rows, append=False):
@@ -174,25 +191,37 @@ def build(args):
     for r in exact['methods']:
         n = r['trials']
         exact_rows.append([r['method'], f"{r['mean_rank']:.2f}", interval(round(n*r['miscoverage_rate']), n),
-                           f"{r['analytic']['miscoverage_rate']:.4g}", interval(round(n*r['false_stop_rate']), n),
-                           f"{r['analytic']['false_stop_rate']:.4g}"])
+                           scientific_probability(r['analytic']['miscoverage_rate']), interval(round(n*r['false_stop_rate']), n),
+                           scientific_probability(r['analytic']['false_stop_rate'])])
+    full_rank_counts = ', '.join(f"{r['method']}: {r['full_rank_returns']}" for r in exact['methods'])
     table(tables, 'exact_projection_table.tex', 'tab:exact-projection',
           r'Exact-law projector diagnostic ($A=I_{80}$, $s=3$, $\alpha=0.05$, $\varepsilon=0.7\sqrt{80}$, $N=20000$, '
           r'seed 4242). MC columns have Wilson 95\% intervals; analytical columns use the chi-square CDF and survival recursion. '
-          r'All runs certify, including the ideal full-rank zero convention. This is not a matrix-free cost benchmark.',
+          r'All runs certify; ideal full-rank zero returns are ' + full_rank_counts +
+          r'. Analytical probabilities use scientific notation. This is not a matrix-free cost benchmark.',
           ['Rule', 'Rank', 'MC miscoverage [CI]', 'Analytical', 'MC false stop [CI]', 'Analytical'], exact_rows)
-    with (args.results / 'exact_end_to_end' / 'trials.csv').open() as handle:
+    followup = getattr(args, 'followup_results', None)
+    if followup is not None:
+        followup_manifest = json.loads((followup / 'manifest_explicit.json').read_text())
+        explicit_protocol = followup_manifest['protocol']['explicit_check']
+        assert all(explicit_protocol[k] == v for k, v in protocol['exact_end_to_end'].items() if k != 'trials')
+        explicit_path = followup / 'explicit_trials.csv'
+    else:
+        explicit_protocol = protocol['exact_end_to_end']
+        explicit_path = args.results / 'exact_end_to_end' / 'trials.csv'
+    with explicit_path.open() as handle:
         explicit = list(csv.DictReader(handle))
     explicit_rows = []
     for method in ('naive', 'power', 'uniform'):
         group = [r for r in explicit if r['method'] == method]
-        assert len(group) == protocol['exact_end_to_end']['trials']
+        assert len(group) == explicit_protocol['trials']
         explicit_rows.append([method, f"{average(group, 'rank'):.2f}",
                               interval(sum(int(r['miscoverage']) for r in group), len(group)),
                               interval(sum(int(r['false_stop']) for r in group), len(group)),
                               sum(int(r['full_rank_convention']) for r in group)])
     table(tables, 'exact_qb_check_table.tex', 'tab:exact-qb-check',
-          r'Explicit identity-matrix QB/probe check: 500 trials per rule with the settings of Table~\ref{tab:exact-projection}, '
+          f"Explicit identity-matrix QB/probe check: {explicit_protocol['trials']} trials per rule with the settings of "
+          r'Table~\ref{tab:exact-projection}, '
           r'seed 20261108. Miscoverage targets the ideal projector energy $80-k$; the separately archived numerical residual '
           r'and orthogonality errors expose roundoff. Every output is accepted. The last column counts the structural full-rank convention.',
           ['Rule', 'Rank', 'Ideal miscoverage [CI]', 'False stop [CI]', 'Full rank'], explicit_rows)
@@ -389,6 +418,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--results', type=Path, default=HERE / 'revision_R1' / 'production_v1_full')
     parser.add_argument('--manuscript-dir', type=Path, required=True)
+    parser.add_argument('--followup-results', type=Path)
     build(parser.parse_args())
 
 
