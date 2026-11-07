@@ -25,3 +25,8 @@ double counting, pilot directions, matched Q prefixes and offline energy checks.
 enumeration, the generated Laplacian's Kronecker sum and positive spectrum,
 and the SPD residual-to-solution-error inequality used in the discussion.
 These are illustrative algebra checks, not new distributional guarantees.
+
+`test_R1_followup.py` compares Schur forward and transpose products with a small
+explicit reference, checks adjoint consistency and actual directional counters,
+and verifies paid norm acquisition versus absolute-tolerance stopping without
+a norm query. It also checks matched basis prefixes and offline-query separation.
