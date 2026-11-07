@@ -6,4 +6,5 @@ __pycache__/
 
 experiments/*/results/
 experiments/*/figures/
+experiments/*/revision_R1/
 experiments/real_matrix_study/data/

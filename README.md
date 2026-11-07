@@ -51,7 +51,34 @@ python -m pip install -r requirements.txt
 
 The optional SVG-to-PDF conversion step requires `rsvg-convert`.
 
+## R1 Working Revision
+
+The revision branch implements the certified/cap-reached output contract described
+in `experiments/src/README.md`. Run its small tests with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Modified QB runners write under `revision_R1/` by default instead of overwriting
+historical results. Their CLI accepts `--results-dir` for explicit output paths.
+The synthetic and real-matrix runners also accept `--adaptive-c C` (C>4) as an
+optional sketch-size variant. Power-law spending remains the default.
+
+R1 changes basis expansion and skips probes at invalid denominators, changing
+random streams and requiring fresh experimental tables. The previous tables are
+not outputs of the revised implementation. Directional cost accounting and the
+energy baseline are documented in `experiments/energy_baseline_study/README.md`;
+the frozen production runs and regenerated resources are documented in
+`experiments/revision_R1_study/README.md`. See `tests/README.md` for contract coverage.
+The limits of the Gaussian implementation and the distinction between matrix
+rank, tensor structure and prospective greedy extensions are recorded in
+[`docs/R1_scope.md`](docs/R1_scope.md).
+
 ## Reproduce All Experiments
+
+The command below is the historical aggregate runner. For the R1 production
+pipeline use `experiments/revision_R1_study/README.md`, not this legacy command.
 
 From the repository root:
 

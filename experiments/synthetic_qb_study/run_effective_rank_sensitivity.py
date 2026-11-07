@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from run_synthetic_qb import run_one, synthetic_matrix
+from run_synthetic_qb import run_one, synthetic_matrix, tolerance_ratio
 
 
 def write_csv(path: Path, rows: list[dict[str, float | str]]) -> None:
@@ -21,6 +21,7 @@ def write_csv(path: Path, rows: list[dict[str, float | str]]) -> None:
         "mean_rank",
         "mean_inspections",
         "false_stop_rate",
+        "certified_stop_rate",
         "mean_residual_ratio",
     ]
     with path.open("w", newline="") as handle:
@@ -60,6 +61,7 @@ def summarize(rows: list[dict[str, float | str]]) -> list[dict[str, float | str]
                 "mean_rank": sum(float(row["rank"]) for row in group) / len(group),
                 "mean_inspections": sum(float(row["inspections"]) for row in group) / len(group),
                 "false_stop_rate": sum(float(row["false_stop"]) for row in group) / len(group),
+                "certified_stop_rate": sum(bool(row["certified"]) for row in group) / len(group),
                 "mean_residual_ratio": sum(float(row["residual_ratio"]) for row in group) / len(group),
             }
         )
@@ -179,6 +181,7 @@ def main() -> None:
     parser.add_argument("--rel-tol", type=float, default=0.1)
     parser.add_argument("--max-rank", type=int, default=110)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--results-dir", type=Path, default=None)
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -209,12 +212,24 @@ def main() -> None:
                         "rank": result.rank,
                         "inspections": result.inspections,
                         "false_stop": result.false_stop,
-                        "residual_ratio": result.residual_fro / result.tolerance,
+                        "status": result.status,
+                        "certified": result.certified,
+                        "tolerance_met": result.tolerance_met,
+                        "n_invalid_denominator": result.n_invalid_denominator,
+                        "s_used": result.s_used,
+                        "s_requested": result.s_requested,
+                        "residual_ratio": tolerance_ratio(result.residual_fro, result.tolerance),
                     }
                 )
 
-    base = Path(__file__).resolve().parent
+    base = args.results_dir or Path(__file__).resolve().parent / 'revision_R1' / 'effective_rank'
     summary = summarize(trial_rows)
+    raw_path = base / 'results' / 'effective_rank_sensitivity_trials.csv'
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    with raw_path.open('w', newline='') as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(trial_rows[0]))
+        writer.writeheader()
+        writer.writerows(trial_rows)
     overhead_rows = overhead(summary)
     write_csv(base / "results" / "effective_rank_sensitivity_summary.csv", summary)
     write_overhead_csv(base / "results" / "effective_rank_sensitivity_overhead.csv", overhead_rows)
