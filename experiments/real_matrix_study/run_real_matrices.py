@@ -13,11 +13,18 @@ import argparse
 import csv
 import math
 import time
+import sys
+import json
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from certification import CertificateResult, extend_basis, gaussian_certificate, positive_int, sketch_size, tolerance_ratio, validate_run, inspection_risk
+from cost_accounting import CostLedger, CoefficientCache, PHASES, direct_stored_residual, energy_residual
 
 try:
     import scipy.io
@@ -58,6 +65,31 @@ class TrialResult:
     residual_eval_matvecs: int
     total_matvecs: int
     false_stop: int
+    status: str
+    certified: bool
+    tolerance_met: bool
+    n_invalid_denominator: int
+    final_certificate_infinite: bool
+    s_used: tuple[int, ...]
+    s_requested: tuple[int, ...]
+    solver_runtime_sec: float
+    b_runtime_sec: float
+    pilot_runtime_sec: float
+    oracle_runtime_sec: float
+    norm_runtime_sec: float
+    solver_A: int
+    solver_AT: int
+    diagnostic_A: int
+    diagnostic_AT: int
+    norm_entries_read: int
+    diagnostic_entries_materialized: int
+    oracle_entries_materialized: int
+    coefficient_mode: str
+    diagnostic_mode: str
+    certificate_kind: str
+    energy_clipped: bool
+    costs_json: str
+    schedule: str
 
 
 def alpha_spending(alpha: float, inspection: int) -> float:
@@ -101,7 +133,7 @@ def load_matrix(path: Path) -> tuple[Any, MatrixInfo]:
         raise ValueError(f"unsupported matrix format: {path}")
 
     if is_sparse_matrix(a):
-        a = a.astype(float)
+        a = a.astype(float).tocsr()
         rows, cols = a.shape
         info = MatrixInfo(path.stem, rows, cols, int(a.nnz), 1)
         return a, info
@@ -120,8 +152,8 @@ def fro_norm(a: Any) -> float:
     return float(np.linalg.norm(a, "fro"))
 
 
-def residual_product(a: Any, q: np.ndarray, omega: np.ndarray) -> np.ndarray:
-    y = matmul(a, omega)
+def residual_product(a: Any, q: np.ndarray, omega: np.ndarray, *, costs=None, phase='certification') -> np.ndarray:
+    y = matmul(a, omega) if costs is None else costs.apply(a, omega, phase)
     if q.size:
         y = y - q @ (q.T @ y)
     return y
@@ -165,20 +197,15 @@ def residual_certificate(
     cert_size: int,
     rho: float,
     cert_batch_size: int,
-) -> float:
-    total = 0.0
-    remaining = cert_size
-    while remaining > 0:
-        batch = min(remaining, cert_batch_size)
-        omega = rng.standard_normal((a.shape[1], batch))
-        sketches = residual_product(a, q, omega)
-        total += float(np.sum(sketches * sketches))
-        remaining -= batch
-    z = total / cert_size
-    inflation = 2.0 * math.sqrt(math.log(1.0 / alpha_level) / (cert_size * rho))
-    if inflation >= 1.0:
-        return math.inf
-    return z / (1.0 - inflation)
+    *,
+    known_zero: bool = False,
+    return_info: bool = False,
+    costs=None,
+) -> float | CertificateResult:
+    result = gaussian_certificate(rng, lambda omega: residual_product(a, q, omega, costs=costs),
+                                  a.shape[1], alpha_level, cert_size, rho,
+                                  cert_batch_size, known_zero=known_zero)
+    return result if return_info else result.upper
 
 
 def effective_rank_pilot(
@@ -187,29 +214,25 @@ def effective_rank_pilot(
     q: np.ndarray,
     pilot_size: int,
     shrink: float,
+    *,
+    costs=None,
 ) -> float:
     omega = rng.standard_normal((a.shape[1], pilot_size))
-    residual_sketch = residual_product(a, q, omega)
+    residual_sketch = residual_product(a, q, omega, costs=costs, phase='pilot')
     trace_estimate = float(np.sum(residual_sketch * residual_sketch) / pilot_size)
     if trace_estimate <= 0.0:
         return 1.0
-    normal_sketch = matmul(a.T, residual_sketch)
+    normal_sketch = matmul(a.T, residual_sketch) if costs is None else costs.apply(a, residual_sketch, 'pilot', transpose=True)
     fourth_estimate = float(np.sum(normal_sketch * normal_sketch) / pilot_size)
     if fourth_estimate <= 0.0:
         return 1.0
     return max(1.0, shrink * trace_estimate * trace_estimate / fourth_estimate)
 
 
-def qb_step(rng: np.random.Generator, a: Any, q: np.ndarray, block_size: int) -> np.ndarray:
+def qb_step(rng: np.random.Generator, a: Any, q: np.ndarray, block_size: int, *, costs=None) -> np.ndarray:
     omega = rng.standard_normal((a.shape[1], block_size))
-    y = residual_product(a, q, omega)
-    q_new, _ = np.linalg.qr(y)
-    if q.size:
-        q_new = q_new - q @ (q.T @ q_new)
-        q_new, _ = np.linalg.qr(q_new)
-        q_all, _ = np.linalg.qr(np.column_stack([q, q_new]))
-        return q_all
-    return q_new
+    y = matmul(a, omega) if costs is None else costs.apply(a, omega, 'qb')
+    return extend_basis(q, y, float(np.linalg.norm(y)))
 
 
 def run_one(
@@ -227,50 +250,98 @@ def run_one(
     cert_batch_size: int,
     rho_pilot_size: int,
     rho_pilot_shrink: float,
+    adaptive_c: float | None = None,
+    coefficient_mode: str = 'final',
+    diagnostic_mode: str = 'energy',
+    basis_rng: np.random.Generator | None = None,
+    schedule: str = 'power',
 ) -> TrialResult:
+    validate_run('naive' if method == 'energy' else method, rho_mode, ('conservative', 'oracle', 'pilot'), block_size,
+                 max_rank, rel_tol, alpha, cert_size)
+    if coefficient_mode not in ('final', 'incremental') or diagnostic_mode not in ('energy', 'direct'):
+        raise ValueError('unknown coefficient or diagnostic mode')
+    if method == 'energy' and coefficient_mode != 'incremental':
+        raise ValueError('energy stopping requires incremental coefficients')
+    sketch_size(alpha, cert_size, 1.0, adaptive_c)
+    inspection_risk(alpha, 1, 1, schedule)
+    positive_int(cert_batch_size, 'cert_batch_size')
+    positive_int(rho_pilot_size, 'rho_pilot_size')
+    if not math.isfinite(rho_pilot_shrink) or not 0 < rho_pilot_shrink <= 1:
+        raise ValueError('rho_pilot_shrink must be in (0,1]')
+    values = a.data if is_sparse_matrix(a) else np.asarray(a)
+    if len(a.shape) != 2 or min(a.shape) < 1 or not np.isfinite(values).all():
+        raise ValueError('a must be a nonempty finite matrix')
     start = time.perf_counter()
+    costs = CostLedger()
+    basis_rng = rng if basis_rng is None else basis_rng
     q = np.empty((a.shape[0], 0))
-    norm_a = fro_norm(a)
+    with costs.measure('norm'):
+        norm_a = fro_norm(a)
     tolerance = rel_tol * norm_a
+    if not math.isfinite(norm_a) or not math.isfinite(tolerance):
+        raise ValueError('matrix norm and tolerance must be finite')
     inspection = 0
     certificate = math.inf
-    qb_runtime = 0.0
-    certification_runtime = 0.0
-    rho_runtime = 0.0
-    qb_matvecs = 0
-    certification_matvecs = 0
-    rho_pilot_matvecs = 0
+    cache = CoefficientCache(a.shape[1])
+    energy_clipped = False
+    oracle_entries = 0
+    cap = min(max_rank, *a.shape)
+    horizon = math.ceil(cap / block_size)
+    known_zero = not np.any(values)
+    invalid = 0
+    used, requested = [], []
 
-    while q.shape[1] < min(max_rank, a.shape[0], a.shape[1]):
-        step_start = time.perf_counter()
-        q = qb_step(rng, a, q, block_size)
-        qb_runtime += time.perf_counter() - step_start
-        qb_matvecs += block_size
+    while q.shape[1] < cap and inspection < horizon:
+        width = min(block_size, cap - q.shape[1])
+        with costs.measure('qb'):
+            q = qb_step(basis_rng, a, q, width, costs=costs)
         inspection += 1
-
-        rho_start = time.perf_counter()
-        if rho_mode == "conservative":
-            rho = 1.0
-        elif rho_mode == "oracle":
-            rho = max(1.0, effective_rank_oracle(a, q))
+        if coefficient_mode == 'incremental':
+            with costs.measure('b'):
+                cache.update(a, q, costs)
+        if method == 'energy':
+            with costs.measure('certification'):
+                energy, clipped = energy_residual(norm_a, cache.bt)
+                energy_clipped |= clipped
+                certificate = energy * energy
+            used.append(0)
+            requested.append(0)
         else:
-            rho = effective_rank_pilot(rng, a, q, rho_pilot_size, rho_pilot_shrink)
-            rho_pilot_matvecs += 2 * rho_pilot_size
-        rho_runtime += time.perf_counter() - rho_start
-
-        alpha_level = alpha if method == "naive" else alpha_spending(alpha, inspection)
-        cert_start = time.perf_counter()
-        certificate = residual_certificate(rng, a, q, alpha_level, cert_size, rho, cert_batch_size)
-        certification_runtime += time.perf_counter() - cert_start
-        certification_matvecs += cert_size
+            if known_zero or rho_mode == 'conservative':
+                rho = 1.0
+            elif rho_mode == 'oracle':
+                with costs.measure('oracle'):
+                    rho = max(1.0, effective_rank_oracle(a, q))
+                    oracle_entries += a.shape[0] * a.shape[1]
+            else:
+                with costs.measure('pilot'):
+                    rho = effective_rank_pilot(rng, a, q, rho_pilot_size, rho_pilot_shrink, costs=costs)
+            alpha_level = alpha if method == 'naive' else inspection_risk(alpha, inspection, horizon, schedule)
+            size = sketch_size(alpha_level, cert_size, rho, adaptive_c)
+            with costs.measure('certification'):
+                result = residual_certificate(rng, a, q, alpha_level, size, rho, cert_batch_size,
+                                              known_zero=known_zero, return_info=True, costs=costs)
+            certificate = result.upper
+            invalid += int(not result.denominator_valid)
+            used.append(result.probes_used)
+            requested.append(size)
         if certificate <= tolerance * tolerance:
             break
 
-    residual_start = time.perf_counter()
-    residual = residual_fro_exact(a, q, norm_a)
-    residual_eval_runtime = time.perf_counter() - residual_start
-    residual_eval_matvecs = int(q.shape[1])
+    # The output is a QB factorization: charge its coefficients, not an extra diagnostic A^T Q.
+    if coefficient_mode == 'final':
+        with costs.measure('b'):
+            cache.update(a, q, costs)
+    solver_elapsed = time.perf_counter() - start
+    with costs.measure('diagnostic'):
+        if diagnostic_mode == 'direct':
+            residual = direct_stored_residual(a, q, cache.bt)
+        else:
+            residual, clipped = energy_residual(norm_a, cache.bt)
+            energy_clipped |= clipped
     elapsed = time.perf_counter() - start
+    certified = certificate <= tolerance * tolerance
+    tolerance_met = residual <= tolerance
     return TrialResult(
         matrix=info.name,
         rows=info.rows,
@@ -281,17 +352,42 @@ def run_one(
         trial=trial,
         rank=int(q.shape[1]),
         inspections=inspection,
-        residual_ratio=residual / tolerance if tolerance > 0 else math.inf,
-        certificate_ratio=math.sqrt(certificate) / tolerance if math.isfinite(certificate) and tolerance > 0 else math.inf,
+        residual_ratio=tolerance_ratio(residual, tolerance),
+        certificate_ratio=tolerance_ratio(math.sqrt(certificate), tolerance),
         runtime_sec=elapsed,
-        qb_runtime_sec=qb_runtime,
-        certification_runtime_sec=certification_runtime + rho_runtime,
-        residual_eval_runtime_sec=residual_eval_runtime,
-        qb_matvecs=qb_matvecs,
-        certification_matvecs=certification_matvecs + rho_pilot_matvecs,
-        residual_eval_matvecs=residual_eval_matvecs,
-        total_matvecs=qb_matvecs + certification_matvecs + rho_pilot_matvecs + residual_eval_matvecs,
-        false_stop=int(residual > tolerance),
+        qb_runtime_sec=costs.seconds['qb'],
+        certification_runtime_sec=costs.seconds['certification'],
+        residual_eval_runtime_sec=costs.seconds['diagnostic'],
+        qb_matvecs=costs.counts['qb']['A'],
+        certification_matvecs=costs.counts['certification']['A'],
+        residual_eval_matvecs=costs.total('A', diagnostic=True) + costs.total('AT', diagnostic=True),
+        total_matvecs=costs.total('A') + costs.total('AT') + costs.total('A', diagnostic=True) + costs.total('AT', diagnostic=True),
+        false_stop=int(certified and not tolerance_met),
+        status='certified' if certified else 'cap_reached',
+        certified=certified,
+        tolerance_met=tolerance_met,
+        n_invalid_denominator=invalid,
+        final_certificate_infinite=math.isinf(certificate),
+        s_used=tuple(used),
+        s_requested=tuple(requested),
+        solver_runtime_sec=solver_elapsed,
+        b_runtime_sec=costs.seconds['b'],
+        pilot_runtime_sec=costs.seconds['pilot'],
+        oracle_runtime_sec=costs.seconds['oracle'],
+        norm_runtime_sec=costs.seconds['norm'],
+        solver_A=costs.total('A'),
+        solver_AT=costs.total('AT'),
+        diagnostic_A=costs.total('A', diagnostic=True),
+        diagnostic_AT=costs.total('AT', diagnostic=True),
+        norm_entries_read=int(values.size),
+        diagnostic_entries_materialized=a.shape[0] * a.shape[1] if diagnostic_mode == 'direct' else 0,
+        oracle_entries_materialized=oracle_entries,
+        coefficient_mode=coefficient_mode,
+        diagnostic_mode=diagnostic_mode,
+        certificate_kind='energy_identity_float64' if method == 'energy' else ('gaussian_pilot_heuristic' if rho_mode == 'pilot' else 'gaussian'),
+        energy_clipped=energy_clipped,
+        costs_json=json.dumps({'counts': costs.counts, 'seconds': costs.seconds}, sort_keys=True),
+        schedule=schedule,
     )
 
 
@@ -362,8 +458,17 @@ def summarize(rows: list[TrialResult]) -> list[dict[str, float | str]]:
                 "mean_residual_eval_matvecs": sum(row.residual_eval_matvecs for row in group) / len(group),
                 "mean_total_matvecs": sum(row.total_matvecs for row in group) / len(group),
                 "false_stop_rate": sum(row.false_stop for row in group) / len(group),
+                "certified_stop_rate": sum(row.certified for row in group) / len(group),
             }
         )
+        for field in ('solver_runtime_sec', 'b_runtime_sec', 'pilot_runtime_sec', 'oracle_runtime_sec',
+                      'norm_runtime_sec', 'solver_A', 'solver_AT', 'diagnostic_A', 'diagnostic_AT',
+                      'norm_entries_read', 'diagnostic_entries_materialized', 'oracle_entries_materialized'):
+            summary[-1]['mean_' + field] = sum(getattr(row, field) for row in group) / len(group)
+        ledgers = [json.loads(row.costs_json)['counts'] for row in group]
+        for phase in PHASES:
+            for direction in ('A', 'AT'):
+                summary[-1][f'mean_{phase}_{direction}'] = sum(ledger[phase][direction] for ledger in ledgers) / len(group)
     return summary
 
 
@@ -397,9 +502,9 @@ def overhead_rows(summary: list[dict[str, float | str]]) -> list[dict[str, float
                 "anytime_residual_ratio": float(anytime["mean_residual_ratio"]),
                 "naive_certificate_ratio": float(naive["mean_certificate_ratio"]),
                 "anytime_certificate_ratio": float(anytime["mean_certificate_ratio"]),
-                "naive_runtime_sec": float(naive["mean_runtime_sec"]),
-                "anytime_runtime_sec": float(anytime["mean_runtime_sec"]),
-                "runtime_overhead_sec": float(anytime["mean_runtime_sec"]) - float(naive["mean_runtime_sec"]),
+                "naive_runtime_sec": float(naive["mean_solver_runtime_sec"]),
+                "anytime_runtime_sec": float(anytime["mean_solver_runtime_sec"]),
+                "runtime_overhead_sec": float(anytime["mean_solver_runtime_sec"]) - float(naive["mean_solver_runtime_sec"]),
                 "naive_qb_runtime_sec": float(naive["mean_qb_runtime_sec"]),
                 "anytime_qb_runtime_sec": float(anytime["mean_qb_runtime_sec"]),
                 "naive_certification_runtime_sec": float(naive["mean_certification_runtime_sec"]),
@@ -409,8 +514,12 @@ def overhead_rows(summary: list[dict[str, float | str]]) -> list[dict[str, float
                 "matvec_overhead": float(anytime["mean_total_matvecs"]) - float(naive["mean_total_matvecs"]),
                 "anytime_certification_matvecs": float(anytime["mean_certification_matvecs"]),
                 "anytime_failure_rate": float(anytime["false_stop_rate"]),
+                "anytime_certified_stop_rate": float(anytime["certified_stop_rate"]),
             }
         )
+        for label, source in (('naive', naive), ('anytime', anytime)):
+            for direction in ('A', 'AT'):
+                rows[-1][f'{label}_solver_{direction}'] = source[f'mean_solver_{direction}']
     return rows
 
 
@@ -446,7 +555,8 @@ def write_latex_table(path: Path, rows: list[dict[str, float | str]]) -> None:
     ]
     for row in rows:
         size = f"${int(row['rows'])}\\times {int(row['cols'])}$"
-        status = "certified" if float(row["anytime_certificate_ratio"]) <= 1.0 else "rank cap"
+        rate = float(row["anytime_certified_stop_rate"])
+        status = 'certified' if rate == 1 else ('cap reached' if rate == 0 else 'mixed')
         lines.append(
             "    "
             f"{display_matrix_name(str(row['matrix']))} & "
@@ -465,13 +575,14 @@ def write_cost_table(path: Path, rows: list[dict[str, float | str]]) -> None:
     lines = [
         "\\begin{table}[t]",
         "  \\centering",
-        "  \\caption{Computational cost of real-matrix adaptive QB experiments.}",
+        "  \\caption{R1 solver cost including input norm, pilot/oracle work, and output coefficient construction, but excluding offline residual diagnostics. Times are seconds; $N_A$ and $N_{A^\\top}$ count right-hand sides, not block calls. Stored-entry norm scans and oracle materialization are recorded separately in the CSV files.}",
         "  \\label{tab:real-matrix-costs}",
         "  \\small",
         "  \\setlength{\\tabcolsep}{4pt}",
-        "  \\begin{tabular}{lrrrrr}",
+        "  \\resizebox{\\textwidth}{!}{%",
+        "  \\begin{tabular}{lrrrrrr}",
         "    \\toprule",
-        "    Matrix & Naive time & Anytime time & Naive matvecs & Anytime matvecs & Cert. matvecs \\\\",
+        "    Matrix & Naive s & Anytime s & Naive $N_A$ & Naive $N_{A^\\top}$ & Anytime $N_A$ & Anytime $N_{A^\\top}$ \\\\",
         "    \\midrule",
     ]
     for row in rows:
@@ -480,11 +591,12 @@ def write_cost_table(path: Path, rows: list[dict[str, float | str]]) -> None:
             f"{display_matrix_name(str(row['matrix']))} & "
             f"{float(row['naive_runtime_sec']):.2f} & "
             f"{float(row['anytime_runtime_sec']):.2f} & "
-            f"{float(row['naive_matvecs']):.0f} & "
-            f"{float(row['anytime_matvecs']):.0f} & "
-            f"{float(row['anytime_certification_matvecs']):.0f} \\\\"
+            f"{float(row['naive_solver_A']):.0f} & "
+            f"{float(row['naive_solver_AT']):.0f} & "
+            f"{float(row['anytime_solver_A']):.0f} & "
+            f"{float(row['anytime_solver_AT']):.0f} \\\\"
         )
-    lines.extend(["    \\bottomrule", "  \\end{tabular}", "\\end{table}"])
+    lines.extend(["    \\bottomrule", "  \\end{tabular}}", "\\end{table}"])
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -505,6 +617,9 @@ def main() -> None:
     parser.add_argument("--exclude", nargs="*", default=None, help="optional matrix stems to exclude")
     parser.add_argument("--results-dir", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--adaptive-c", type=float, default=None)
+    parser.add_argument('--coefficient-mode', choices=['final', 'incremental'], default='final')
+    parser.add_argument('--diagnostic-mode', choices=['energy', 'direct'], default='energy')
     args = parser.parse_args()
 
     files = filter_matrix_files(matrix_files(args.data_dir), args.include, args.exclude)
@@ -535,11 +650,18 @@ def main() -> None:
                         cert_batch_size=args.cert_batch_size,
                         rho_pilot_size=args.rho_pilot_size,
                         rho_pilot_shrink=args.rho_pilot_shrink,
+                        adaptive_c=args.adaptive_c,
+                        coefficient_mode=args.coefficient_mode,
+                        diagnostic_mode=args.diagnostic_mode,
                     )
                 )
 
     base = Path(__file__).resolve().parent
-    results_dir = args.results_dir if args.results_dir is not None else base / "results"
+    results_dir = args.results_dir if args.results_dir is not None else base / "revision_R1" / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    configuration = dict(vars(args), python=platform.python_version(), numpy=np.__version__,
+                         scipy=scipy.__version__ if scipy is not None else None)
+    (results_dir / 'config.json').write_text(json.dumps(configuration, indent=2, default=str) + '\n')
     summary = summarize(rows)
     overhead = overhead_rows(summary)
     write_trials(results_dir / "real_matrix_trials.csv", rows)

@@ -5,10 +5,14 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from certification import CertificateResult, extend_basis, gaussian_certificate, sketch_size, tolerance_ratio, validate_run, inspection_risk
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,13 @@ class TrialResult:
     tolerance: float
     certificate: float
     false_stop: int
+    status: str
+    certified: bool
+    tolerance_met: bool
+    n_invalid_denominator: int
+    final_certificate_infinite: bool
+    s_used: tuple[int, ...]
+    s_requested: tuple[int, ...]
 
 
 def alpha_spending(alpha: float, inspection: int) -> float:
@@ -80,28 +91,19 @@ def residual_certificate(
     alpha_level: float,
     cert_size: int,
     rho: float,
-) -> float:
-    omega = rng.standard_normal((r.shape[1], cert_size))
-    sketches = r @ omega
-    z = float(np.sum(sketches * sketches) / cert_size)
-    inflation = 2.0 * math.sqrt(math.log(1.0 / alpha_level) / (cert_size * rho))
-    if inflation >= 1.0:
-        return math.inf
-    return z / (1.0 - inflation)
+    *,
+    known_zero: bool = False,
+    return_info: bool = False,
+) -> float | CertificateResult:
+    result = gaussian_certificate(rng, lambda omega: r @ omega, r.shape[1],
+                                  alpha_level, cert_size, rho, known_zero=known_zero)
+    return result if return_info else result.upper
 
 
 def qb_step(rng: np.random.Generator, a: np.ndarray, q: np.ndarray, block_size: int) -> np.ndarray:
     omega = rng.standard_normal((a.shape[1], block_size))
     y = a @ omega
-    if q.size:
-        y = y - q @ (q.T @ y)
-    q_new, _ = np.linalg.qr(y)
-    if q.size:
-        q_new = q_new - q @ (q.T @ q_new)
-        q_new, _ = np.linalg.qr(q_new)
-        q_combined, _ = np.linalg.qr(np.column_stack([q, q_new]))
-        return q_combined
-    return q_new
+    return extend_basis(q, y, float(np.linalg.norm(y)))
 
 
 def run_one(
@@ -116,25 +118,51 @@ def run_one(
     rel_tol: float,
     max_rank: int,
     rho_mode: str,
+    adaptive_c: float | None = None,
+    basis_rng: np.random.Generator | None = None,
+    schedule: str = 'power',
 ) -> TrialResult:
+    validate_run(method, rho_mode, ('conservative', 'oracle'), block_size,
+                 max_rank, rel_tol, alpha, cert_size)
+    sketch_size(alpha, cert_size, 1.0, adaptive_c)
+    inspection_risk(alpha, 1, 1, schedule)
+    basis_rng = rng if basis_rng is None else basis_rng
+    if a.ndim != 2 or min(a.shape) < 1 or not np.isfinite(a).all():
+        raise ValueError('a must be a nonempty finite matrix')
     q = np.empty((a.shape[0], 0))
     norm_a = float(np.linalg.norm(a, "fro"))
     tolerance = rel_tol * norm_a
+    if not math.isfinite(norm_a) or not math.isfinite(tolerance):
+        raise ValueError('matrix norm and tolerance must be finite')
     inspection = 0
     certificate = math.inf
     residual_norm = norm_a
+    cap = min(max_rank, *a.shape)
+    horizon = math.ceil(cap / block_size)
+    known_zero = not np.any(a)
+    invalid = 0
+    used, requested = [], []
 
-    while q.shape[1] < max_rank:
-        q = qb_step(rng, a, q, block_size)
+    while q.shape[1] < cap and inspection < horizon:
+        width = min(block_size, cap - q.shape[1])
+        q = qb_step(basis_rng, a, q, width)
         inspection += 1
         r = residual_matrix(a, q)
         residual_norm = float(np.linalg.norm(r, "fro"))
-        rho = 1.0 if rho_mode == "conservative" else max(1.0, effective_rank(r))
-        alpha_level = alpha if method == "naive" else alpha_spending(alpha, inspection)
-        certificate = residual_certificate(rng, r, alpha_level, cert_size, rho)
+        rho = 1.0 if known_zero or rho_mode == "conservative" else max(1.0, effective_rank(r))
+        alpha_level = alpha if method == "naive" else inspection_risk(alpha, inspection, horizon, schedule)
+        size = sketch_size(alpha_level, cert_size, rho, adaptive_c)
+        result = residual_certificate(rng, r, alpha_level, size, rho,
+                                      known_zero=known_zero, return_info=True)
+        certificate = result.upper
+        invalid += int(not result.denominator_valid)
+        used.append(result.probes_used)
+        requested.append(size)
         if certificate <= tolerance * tolerance:
             break
 
+    certified = certificate <= tolerance * tolerance
+    tolerance_met = residual_norm <= tolerance
     return TrialResult(
         spectrum=spectrum,
         method=method,
@@ -144,7 +172,14 @@ def run_one(
         residual_fro=residual_norm,
         tolerance=tolerance,
         certificate=certificate,
-        false_stop=int(residual_norm > tolerance),
+        false_stop=int(certified and not tolerance_met),
+        status='certified' if certified else 'cap_reached',
+        certified=certified,
+        tolerance_met=tolerance_met,
+        n_invalid_denominator=invalid,
+        final_certificate_infinite=math.isinf(certificate),
+        s_used=tuple(used),
+        s_requested=tuple(requested),
     )
 
 
@@ -171,7 +206,8 @@ def summarize(rows: list[TrialResult]) -> list[dict[str, float | str]]:
                 "mean_rank": sum(r.rank for r in group) / len(group),
                 "mean_inspections": sum(r.inspections for r in group) / len(group),
                 "false_stop_rate": sum(r.false_stop for r in group) / len(group),
-                "mean_residual_ratio": sum(r.residual_fro / r.tolerance for r in group) / len(group),
+                "certified_stop_rate": sum(r.certified for r in group) / len(group),
+                "mean_residual_ratio": sum(tolerance_ratio(r.residual_fro, r.tolerance) for r in group) / len(group),
             }
         )
     return summary
@@ -186,6 +222,7 @@ def write_summary(path: Path, rows: list[dict[str, float | str]]) -> None:
         "mean_rank",
         "mean_inspections",
         "false_stop_rate",
+        "certified_stop_rate",
         "mean_residual_ratio",
     ]
     with path.open("w", newline="") as handle:
@@ -241,12 +278,12 @@ def write_overhead_csv(path: Path, rows: list[dict[str, float | str]]) -> None:
         writer.writerows(rows)
 
 
-def write_latex_overhead_table(path: Path, rows: list[dict[str, float | str]]) -> None:
+def write_latex_overhead_table(path: Path, rows: list[dict[str, float | str]], rho_mode: str = 'oracle') -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "\\begin{table}[t]",
         "  \\centering",
-        "  \\caption{Rank and inspection overhead of oracle anytime-valid stopping on synthetic QB experiments. The anytime rule uses \\(\\rho_j=\\reff(R_j)\\) to isolate the cost of sequential calibration from effective-rank estimation.}",
+        "  \\caption{Rank and inspection overhead of anytime stopping on synthetic QB experiments. Effective-rank mode: " + rho_mode + ". Ranks include all returns, including uncertified cap exits.}",
         "  \\label{tab:synthetic-qb-overhead}",
         "  \\resizebox{\\textwidth}{!}{%",
         "  \\begin{tabular}{lrrrr}",
@@ -339,6 +376,8 @@ def main() -> None:
     parser.add_argument("--max-rank", type=int, default=100)
     parser.add_argument("--rho-mode", choices=["conservative", "oracle"], default="oracle")
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--adaptive-c", type=float, default=None)
+    parser.add_argument("--results-dir", type=Path, default=None)
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -361,16 +400,19 @@ def main() -> None:
                         rel_tol=args.rel_tol,
                         max_rank=args.max_rank,
                         rho_mode=args.rho_mode,
+                        adaptive_c=args.adaptive_c,
                     )
                 )
 
     base = Path(__file__).resolve().parent
+    # R1 runs never overwrite the original experiment outputs by default.
+    base = args.results_dir or base / 'revision_R1'
     summary = summarize(rows)
     overhead = overhead_rows(summary)
     write_trials(base / "results" / "synthetic_qb_trials.csv", rows)
     write_summary(base / "results" / "synthetic_qb_summary.csv", summary)
     write_overhead_csv(base / "results" / "synthetic_qb_overhead.csv", overhead)
-    write_latex_overhead_table(base / "results" / "synthetic_qb_overhead_table.tex", overhead)
+    write_latex_overhead_table(base / "results" / "synthetic_qb_overhead_table.tex", overhead, args.rho_mode)
     write_rank_svg(base / "figures" / "synthetic_qb_rank_overhead.svg", summary)
 
     print(f"wrote: {base / 'results' / 'synthetic_qb_trials.csv'}")

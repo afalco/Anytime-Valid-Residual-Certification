@@ -1,0 +1,17 @@
+{
+  "id": "RINENG-R1-production-20261107-v1",
+  "seed": 20261107,
+  "blas_threads": 1,
+  "spectra": ["exponential", "polynomial", "flat_tail", "noisy_low_rank"],
+  "coverage": {"trials": 500, "n": 80, "block_size": 1, "max_rank": 80, "cert_size": 3, "alpha": 0.25, "rel_tol": 0.1, "rho_mode": "oracle"},
+  "rank": {"trials": 40, "n": 120, "block_size": 5, "max_rank": 100, "cert_size": 80, "alpha": 0.05, "rel_tol": 0.1, "rho_mode": "oracle"},
+  "rho": {"trials": 30, "n": 120, "block_size": 5, "max_rank": 110, "cert_size": 80, "alpha": 0.05, "rel_tol": 0.1},
+  "sensitivity": {"trials": 100, "n": 120, "block_size": 5, "max_rank": 100, "sizes": [32, 80, 200], "alphas": [0.1, 0.05, 0.01], "rel_tol": 0.1, "spectra": ["exponential", "flat_tail"], "schedules": ["power", "uniform"]},
+  "adaptive": {"trials": 100, "n": 120, "block_size": 5, "max_rank": 100, "cert_size": 32, "alpha": 0.05, "rel_tol": 0.1, "adaptive_c": 16, "spectra": ["exponential", "flat_tail"], "schedules": ["power", "uniform"]},
+  "cost": {"trials": 40, "n": 120, "block_size": 5, "max_rank": 100, "cert_size": 80, "alpha": 0.05, "rel_tol": 0.1},
+  "real": {"trials": 20, "block_size": 5, "max_rank": 150, "cert_size": 80, "alpha": 0.05, "rel_tol": 0.1, "files": ["camera_like_192x192.npy", "digits_1797x64.npy", "elliptic_laplacian_289x289.npz", "skimage_astronaut_gray_384x384.npy", "skimage_camera_512x512.npy", "skimage_coins_303x384.npy", "term_document_260x190.npz"]},
+  "sparse_lowrank": {"trials": 20, "block_size": 10, "max_rank": 120, "cert_size": 200, "alpha": 0.05, "rel_tol": 0.1, "files": ["suitesparse_lowrank/LPnetlib_lp_fit2p_transpose.npz"]},
+  "graphs": {"trials": 10, "block_size": 10, "max_rank": 120, "cert_size": 200, "cert_batch_size": 20, "alpha": 0.05, "rel_tol": 0.95, "files": ["suitesparse/SNAP_ca-HepPh.mtx", "suitesparse/SNAP_email-Enron.mtx", "suitesparse/SNAP_web-NotreDame.mtx"]},
+  "exact": {"trials": 20000, "n": 80, "s": 3, "alpha": 0.05, "rel_tol": 0.7, "seed": 4242},
+  "exact_end_to_end": {"trials": 500, "n": 80, "s": 3, "alpha": 0.05, "rel_tol": 0.7, "seed": 20261108}
+}

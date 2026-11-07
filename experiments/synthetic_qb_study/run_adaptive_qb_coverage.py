@@ -13,6 +13,8 @@ from run_synthetic_qb import (
     TrialResult,
     run_one,
     synthetic_matrix,
+    write_trials,
+    tolerance_ratio,
 )
 
 
@@ -40,7 +42,11 @@ def summarize(rows: list[TrialResult], alpha: float) -> list[dict[str, float | s
             row.certificate < row.residual_fro * row.residual_fro for row in group
         ) / trials
         false_stop_rate = sum(row.false_stop for row in group) / trials
-        certified_stop_rate = sum(row.certificate <= row.tolerance * row.tolerance for row in group) / trials
+        certified_count = sum(row.certified for row in group)
+        false_count = sum(row.false_stop for row in group)
+        certified_stop_rate = certified_count / trials
+        conditional_rate = false_count / certified_count if certified_count else math.nan
+        conditional_ci = wilson_interval(conditional_rate, certified_count)
         summary.append(
             {
                 "spectrum": spectrum,
@@ -56,7 +62,14 @@ def summarize(rows: list[TrialResult], alpha: float) -> list[dict[str, float | s
                 "false_stop_ci_low": wilson_interval(false_stop_rate, trials)[0],
                 "false_stop_ci_high": wilson_interval(false_stop_rate, trials)[1],
                 "certified_stop_rate": certified_stop_rate,
-                "mean_residual_to_tolerance": sum(row.residual_fro / row.tolerance for row in group)
+                "certified_runs": certified_count,
+                "conditional_false_stop_rate": conditional_rate,
+                "conditional_false_stop_ci_low": conditional_ci[0],
+                "conditional_false_stop_ci_high": conditional_ci[1],
+                "invalid_inspection_fraction": sum(row.n_invalid_denominator for row in group)
+                / sum(row.inspections for row in group),
+                "final_infinite_fraction": sum(row.final_certificate_infinite for row in group) / trials,
+                "mean_residual_to_tolerance": sum(tolerance_ratio(row.residual_fro, row.tolerance) for row in group)
                 / len(group),
             }
         )
@@ -70,7 +83,8 @@ def write_dicts(path: Path, rows: list[dict[str, float | str]]) -> None:
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows({key: 'NA' if isinstance(value, float) and math.isnan(value) else value
+                          for key, value in row.items()} for row in rows)
 
 
 def write_latex_table(path: Path, rows: list[dict[str, float | str]]) -> None:
@@ -116,6 +130,7 @@ def main() -> None:
     parser.add_argument("--rel-tol", type=float, default=0.1)
     parser.add_argument("--max-rank", type=int, default=80)
     parser.add_argument("--seed", type=int, default=127)
+    parser.add_argument("--results-dir", type=Path, default=None)
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -141,12 +156,14 @@ def main() -> None:
                 )
 
     base = Path(__file__).resolve().parent
+    results = args.results_dir or base / 'revision_R1' / 'coverage'
     summary = summarize(rows, args.alpha)
-    write_dicts(base / "results" / "adaptive_qb_coverage_summary.csv", summary)
-    write_latex_table(base / "results" / "adaptive_qb_coverage_table.tex", summary)
+    write_trials(results / 'adaptive_qb_coverage_trials.csv', rows)
+    write_dicts(results / "adaptive_qb_coverage_summary.csv", summary)
+    # The legacy caption hard-codes the original study parameters; do not reuse it for R1.
 
-    print(f"wrote: {base / 'results' / 'adaptive_qb_coverage_summary.csv'}")
-    print(f"wrote: {base / 'results' / 'adaptive_qb_coverage_table.tex'}")
+    print(f"wrote: {results / 'adaptive_qb_coverage_summary.csv'}")
+    print(f"wrote: {results / 'adaptive_qb_coverage_trials.csv'}")
     for row in summary:
         print(
             f"{row['spectrum']:>15} {row['method']:>7}: "

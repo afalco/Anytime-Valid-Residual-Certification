@@ -1,5 +1,24 @@
 # Real Matrix Study
 
+## R1 Cost Accounting
+
+The revised runner reports `solver_A` and `solver_AT` separately, with phase
+counts/timers in `costs_json`. Solver time includes norm preprocessing and final
+B construction; `runtime_sec` also includes the separately timed offline check.
+The previous `*_matvecs` columns are compatibility totals and must not be read as
+counts exclusively of A products. The R1 cost table uses the new directional counts.
+
+Use `--coefficient-mode final` (default) for Q-only growth or `incremental` for
+B updates. `--diagnostic-mode energy` reuses cached B; `direct` reads stored
+blocks of A-QB independently of energy subtraction, with its cost excluded from
+solver time. Data loading and input validation are outside solver timing.
+The norm entry scan and any dense oracle work are not free matrix-free operations.
+Old descriptions below refer to the historical study; R1 outputs default to
+`revision_R1/results/` and save config.json. Do not overwrite the published tables.
+
+For a matched-prefix deterministic energy comparison, use
+`../energy_baseline_study/run_energy_baseline.py` and its README.
+
 This directory is for completing Section 7.4, `Real Matrices`.
 
 ## Purpose
@@ -17,12 +36,11 @@ For each matrix, the script records:
 - whether the input is sparse;
 - selected rank;
 - number of inspections;
-- final true residual ratio;
+- final offline numerical residual ratio;
 - final certificate ratio;
 - total runtime;
 - QB runtime, certification runtime, and final residual-evaluation runtime;
-- matrix-vector products with \(A\), split into QB sampling, certification, and
-  final residual evaluation;
+- separate applications of \(A\) and \(A^\top\), split by phase;
 - false stop indicator.
 
 ## Supported Matrix Formats
