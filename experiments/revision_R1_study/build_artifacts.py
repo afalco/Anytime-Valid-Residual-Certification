@@ -25,7 +25,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / 'audit'))
-from run_exact_projection_diagnostic import wilson
+from run_exact_projection_diagnostic import wilson as _wilson
 from run_production import GROUPS, expected, write_csv
 
 
@@ -46,11 +46,27 @@ def average(rows, field):
     return float(np.mean([float(row[field]) for row in rows]))
 
 
+def wilson(count, total):
+    lo, hi = _wilson(count, total)
+    return (0.0 if count == 0 else lo, 1.0 if count == total else hi)
+
+
+def probability(value):
+    if value in (0, 1):
+        return str(int(value))
+    return f'{value:.6f}'.rstrip('0').rstrip('.')
+
+
+def scientific_probability(value):
+    mantissa, exponent = f'{value:.3e}'.split('e')
+    return rf'${mantissa}\times10^{{{int(exponent)}}}$'
+
+
 def interval(count, total):
     if not total:
         return 'NA'
     lo, hi = wilson(count, total)
-    return f'{count/total:.3g} [{lo:.3g},{hi:.3g}]'
+    return f'{probability(count/total)} [{probability(lo)},{probability(hi)}]'
 
 
 def table(directory, filename, label, caption, headers, rows, append=False):
@@ -174,12 +190,14 @@ def build(args):
     for r in exact['methods']:
         n = r['trials']
         exact_rows.append([r['method'], f"{r['mean_rank']:.2f}", interval(round(n*r['miscoverage_rate']), n),
-                           f"{r['analytic']['miscoverage_rate']:.4g}", interval(round(n*r['false_stop_rate']), n),
-                           f"{r['analytic']['false_stop_rate']:.4g}"])
+                           scientific_probability(r['analytic']['miscoverage_rate']), interval(round(n*r['false_stop_rate']), n),
+                           scientific_probability(r['analytic']['false_stop_rate'])])
+    full_rank_counts = ', '.join(f"{r['method']}: {r['full_rank_returns']}" for r in exact['methods'])
     table(tables, 'exact_projection_table.tex', 'tab:exact-projection',
           r'Exact-law projector diagnostic ($A=I_{80}$, $s=3$, $\alpha=0.05$, $\varepsilon=0.7\sqrt{80}$, $N=20000$, '
           r'seed 4242). MC columns have Wilson 95\% intervals; analytical columns use the chi-square CDF and survival recursion. '
-          r'All runs certify, including the ideal full-rank zero convention. This is not a matrix-free cost benchmark.',
+          r'All runs certify; ideal full-rank zero returns are ' + full_rank_counts +
+          r'. Analytical probabilities use scientific notation. This is not a matrix-free cost benchmark.',
           ['Rule', 'Rank', 'MC miscoverage [CI]', 'Analytical', 'MC false stop [CI]', 'Analytical'], exact_rows)
     with (args.results / 'exact_end_to_end' / 'trials.csv').open() as handle:
         explicit = list(csv.DictReader(handle))

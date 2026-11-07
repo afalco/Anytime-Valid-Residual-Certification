@@ -1,0 +1,6 @@
+{
+  "id": "RINENG-R1-followup-20261107-v1",
+  "blas_threads": 1,
+  "explicit_check": {"trials": 2000, "n": 80, "s": 3, "alpha": 0.05, "rel_tol": 0.7, "seed": 20261108},
+  "implicit_schur": {"trials": 20, "n": 1024, "block_size": 5, "max_rank": 60, "cert_size": 80, "alpha": 0.05, "epsilon": 0.01, "batch_size": 32, "shift": 0.00001, "problem_seed": 20261109, "trial_seed": 20261110}
+}
