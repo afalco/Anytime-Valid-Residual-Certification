@@ -75,10 +75,10 @@ def table(directory, filename, label, caption, headers, rows, append=False):
     alignment = 'l' * text_columns + 'r' * (len(headers) - text_columns)
     lines = [r'\begin{table}[t]', r'  \centering', '  \\caption{' + caption + '}',
              '  \\label{' + label + '}', r'  \small', r'  \setlength{\tabcolsep}{4pt}',
-             r'  \resizebox{\textwidth}{!}{%', '  \\begin{tabular}{' + alignment + '}',
+             r'  \begin{adjustbox}{max width=\linewidth}', '  \\begin{tabular}{' + alignment + '}',
              r'    \toprule', '    ' + ' & '.join(headers) + r' \\', r'    \midrule']
     lines.extend('    ' + ' & '.join(str(value) for value in row) + r' \\' for row in rows)
-    lines.extend([r'    \bottomrule', r'  \end{tabular}}', r'\end{table}'])
+    lines.extend([r'    \bottomrule', r'  \end{tabular}', r'  \end{adjustbox}', r'\end{table}'])
     target = directory / filename
     temporary = target.with_suffix('.tmp.tex')
     prefix = target.read_text() + '\n' if append else ''

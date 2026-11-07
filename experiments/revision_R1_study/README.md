@@ -86,3 +86,8 @@ Wait for artifact generation to finish before compiling paper_R1.tex. Tables and
 figures are replaced atomically, and long stored-cost tables are split into
 continuations rather than overflowing a page. Small confidence bounds retain
 significant digits so zero-event intervals never appear to have zero width.
+
+Generated tables use `\small` and an `adjustbox` maximum-width constraint.
+Narrow tables keep their natural width and are never enlarged; only tables
+wider than the available line are reduced. The LaTeX manuscript must load
+`\usepackage{adjustbox}`. The follow-up study shares this table generator.
